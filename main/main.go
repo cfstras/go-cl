@@ -3,6 +3,8 @@ package main
 /*
 #cgo LDFLAGS: -lOpenCL
 
+#include <stdlib.h>
+
 #ifdef __APPLE__
 #  include "OpenCL/opencl.h"
 #else
@@ -18,14 +20,17 @@ import (
 )
 
 type Context struct {
-	Err       C.cl_int
 	C_context C.cl_context
+	Queue     C.cl_command_queue
 
 	NumDevices C.cl_uint
 	DeviceIDs  []C.cl_device_id
+
+	Err C.cl_int
 }
 
 type Buffer C.cl_mem
+type Kernel C.cl_kernel
 
 func CreateContext() *Context {
 	c := &Context{}
@@ -57,6 +62,10 @@ func CreateContext() *Context {
 	c.C_context = C.clCreateContext(&contextProps[0], 1, &c.DeviceIDs[0], nil, nil,
 		&c.Err)
 	c.CheckErr()
+
+	c.Queue = C.clCreateCommandQueue(c.C_context, c.DeviceIDs[0], 0, &c.Err)
+	c.CheckErr()
+
 	return c
 }
 
@@ -67,6 +76,22 @@ func (c *Context) CreateBuffer(data []float32) Buffer {
 		&c.Err)
 	c.CheckErr()
 	return Buffer(buffer)
+}
+
+func (c *Context) CompileProgram(code, mainFunction string) Kernel {
+	str := C.CString(sourceCode)
+	defer C.free(unsafe.Pointer(str))
+	prog := C.clCreateProgramWithSource(c.C_context, 1, &str, nil, &c.Err)
+	c.CheckErr()
+
+	C.clBuildProgram(prog, c.NumDevices, &c.DeviceIDs[0], nil, nil, nil)
+	c.CheckErr()
+
+	mainFunc := C.CString(mainFunction)
+	defer C.free(unsafe.Pointer(mainFunc))
+	kernel := C.clCreateKernel(prog, mainFunc, &c.Err)
+	c.CheckErr()
+	return Kernel(kernel)
 }
 
 func (c *Context) CheckErr() {
@@ -88,14 +113,29 @@ func main() {
 	ctx := CreateContext()
 
 	x := []float32{1, 2, 3, 4}
+	y := make([]float32, 4)
 	buffer := ctx.CreateBuffer(x)
+	dstBuffer := ctx.CreateBuffer(y)
 
-	str := C.CString(sourceCode)
-	prog := C.clCreateProgramWithSource(ctx.C_context, 1, &str, nil, &ctx.Err)
+	kernel := ctx.CompileProgram(sourceCode, "SAXPY")
+
+	C.clSetKernelArg(kernel, 0, C.size_t(unsafe.Sizeof(buffer)),
+		unsafe.Pointer(&buffer))
+	C.clSetKernelArg(kernel, 1, C.size_t(unsafe.Sizeof(dstBuffer)),
+		unsafe.Pointer(&dstBuffer))
+
+	var mult float32 = 2.0
+	C.clSetKernelArg(kernel, 2, C.size_t(unsafe.Sizeof(mult)),
+		unsafe.Pointer(&mult))
+
+	// start!
+	workSize := []C.size_t{C.size_t(len(x)), 0, 0}
+	C.clEnqueueNDRangeKernel(ctx.Queue, kernel, 1,
+		nil, &workSize[0], nil, 0, nil, nil)
+
+	ctx.Err = C.clEnqueueReadBuffer(ctx.Queue, dstBuffer, C.cl_bool(1), 0,
+		C.size_t(int(unsafe.Sizeof(x[0]))*len(x)), unsafe.Pointer(&y[0]), 0, nil, nil)
 	ctx.CheckErr()
 
-	C.clBuildProgram(prog, ctx.NumDevices, &ctx.DeviceIDs[0], nil, nil, nil)
-	ctx.CheckErr()
-
-	fmt.Println(prog, buffer)
+	fmt.Println(x, "*", mult, "=", y, "!!")
 }
