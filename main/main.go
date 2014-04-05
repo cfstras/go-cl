@@ -20,8 +20,8 @@ import (
 )
 
 type Context struct {
-	C_context C.cl_context
-	Queue     C.cl_command_queue
+	C     C.cl_context
+	Queue C.cl_command_queue
 
 	NumDevices C.cl_uint
 	DeviceIDs  []C.cl_device_id
@@ -30,7 +30,10 @@ type Context struct {
 }
 
 type Buffer C.cl_mem
-type Kernel C.cl_kernel
+
+type Kernel struct {
+	K C.cl_kernel
+}
 
 func CreateContext() *Context {
 	c := &Context{}
@@ -59,29 +62,41 @@ func CreateContext() *Context {
 		0,
 	}
 
-	c.C_context = C.clCreateContext(&contextProps[0], 1, &c.DeviceIDs[0], nil, nil,
+	c.GetInfo()
+
+	c.C = C.clCreateContext(&contextProps[0], 1, &c.DeviceIDs[0], nil, nil,
 		&c.Err)
 	c.CheckErr()
 
-	c.Queue = C.clCreateCommandQueue(c.C_context, c.DeviceIDs[0], 0, &c.Err)
+	c.Queue = C.clCreateCommandQueue(c.C, c.DeviceIDs[0], 0, &c.Err)
 	c.CheckErr()
 
 	return c
 }
 
+func (c *Context) GetInfo() {
+	l := 128
+	mem := C.malloc(C.size_t(unsafe.Sizeof(C.char(0))) * C.size_t(l))
+	defer C.free(mem)
+	c.Err = C.clGetDeviceInfo(c.DeviceIDs[0], C.CL_DEVICE_NAME, C.size_t(l), mem, nil)
+	name := C.GoString((*C.char)(mem))
+	fmt.Println("Name:", name)
+}
+
 func (c *Context) CreateBuffer(data []float32) Buffer {
 	var buffer C.cl_mem
-	buffer = C.clCreateBuffer(c.C_context, C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR,
+	buffer = C.clCreateBuffer(c.C, C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR,
 		C.size_t(int(unsafe.Sizeof(data[0]))*len(data)), unsafe.Pointer(&data[0]),
 		&c.Err)
 	c.CheckErr()
 	return Buffer(buffer)
 }
 
-func (c *Context) CompileProgram(code, mainFunction string) Kernel {
+func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
+	k := Kernel{}
 	str := C.CString(sourceCode)
 	defer C.free(unsafe.Pointer(str))
-	prog := C.clCreateProgramWithSource(c.C_context, 1, &str, nil, &c.Err)
+	prog := C.clCreateProgramWithSource(c.C, 1, &str, nil, &c.Err)
 	c.CheckErr()
 
 	C.clBuildProgram(prog, c.NumDevices, &c.DeviceIDs[0], nil, nil, nil)
@@ -91,7 +106,18 @@ func (c *Context) CompileProgram(code, mainFunction string) Kernel {
 	defer C.free(unsafe.Pointer(mainFunc))
 	kernel := C.clCreateKernel(prog, mainFunc, &c.Err)
 	c.CheckErr()
-	return Kernel(kernel)
+	k.K = kernel
+	return &k
+}
+
+func (k *Kernel) SetBuf(pos int, value Buffer) {
+	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(unsafe.Sizeof(value)),
+		unsafe.Pointer(&value))
+}
+
+func (k *Kernel) SetFloat(pos int, value float32) {
+	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(unsafe.Sizeof(value)),
+		unsafe.Pointer(&value))
 }
 
 func (c *Context) CheckErr() {
@@ -113,24 +139,20 @@ func main() {
 	ctx := CreateContext()
 
 	x := []float32{1, 2, 3, 4}
+	var mult float32 = 2.0
 	y := make([]float32, 4)
 	buffer := ctx.CreateBuffer(x)
 	dstBuffer := ctx.CreateBuffer(y)
 
 	kernel := ctx.CompileProgram(sourceCode, "SAXPY")
 
-	C.clSetKernelArg(kernel, 0, C.size_t(unsafe.Sizeof(buffer)),
-		unsafe.Pointer(&buffer))
-	C.clSetKernelArg(kernel, 1, C.size_t(unsafe.Sizeof(dstBuffer)),
-		unsafe.Pointer(&dstBuffer))
-
-	var mult float32 = 2.0
-	C.clSetKernelArg(kernel, 2, C.size_t(unsafe.Sizeof(mult)),
-		unsafe.Pointer(&mult))
+	kernel.SetBuf(0, buffer)
+	kernel.SetBuf(1, dstBuffer)
+	kernel.SetFloat(2, mult)
 
 	// start!
 	workSize := []C.size_t{C.size_t(len(x)), 0, 0}
-	C.clEnqueueNDRangeKernel(ctx.Queue, kernel, 1,
+	C.clEnqueueNDRangeKernel(ctx.Queue, kernel.K, 1,
 		nil, &workSize[0], nil, 0, nil, nil)
 
 	ctx.Err = C.clEnqueueReadBuffer(ctx.Queue, dstBuffer, C.cl_bool(1), 0,
