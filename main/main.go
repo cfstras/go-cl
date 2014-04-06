@@ -16,6 +16,7 @@ import "C"
 
 import (
 	"fmt"
+	"reflect"
 	"unsafe"
 )
 
@@ -110,14 +111,32 @@ func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
 	return &k
 }
 
-func (k *Kernel) SetBuf(pos int, value Buffer) {
-	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(unsafe.Sizeof(value)),
-		unsafe.Pointer(&value))
-}
-
-func (k *Kernel) SetFloat(pos int, value float32) {
-	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(unsafe.Sizeof(value)),
-		unsafe.Pointer(&value))
+func (k *Kernel) SetArg(pos int, value interface{}) {
+	var ptr unsafe.Pointer
+	var size uintptr
+	switch t := value.(type) {
+	case Buffer:
+		ptr = unsafe.Pointer(&t)
+		size = unsafe.Sizeof(t)
+	case float32:
+		ptr = unsafe.Pointer(&t)
+		size = unsafe.Sizeof(t)
+	case float64:
+		ptr = unsafe.Pointer(&t)
+		size = unsafe.Sizeof(t)
+	case *float32:
+		ptr = unsafe.Pointer(t)
+		size = unsafe.Sizeof(*t)
+	case *float64:
+		ptr = unsafe.Pointer(t)
+		size = unsafe.Sizeof(*t)
+	case *Buffer:
+		ptr = unsafe.Pointer(t)
+		size = unsafe.Sizeof(*t)
+	default:
+		panic(fmt.Sprint("Type ", reflect.TypeOf(t), " not supported"))
+	}
+	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(size), ptr)
 }
 
 func (c *Context) CheckErr() {
@@ -146,9 +165,9 @@ func main() {
 
 	kernel := ctx.CompileProgram(sourceCode, "SAXPY")
 
-	kernel.SetBuf(0, buffer)
-	kernel.SetBuf(1, dstBuffer)
-	kernel.SetFloat(2, mult)
+	kernel.SetArg(0, buffer)
+	kernel.SetArg(1, dstBuffer)
+	kernel.SetArg(2, mult)
 
 	// start!
 	workSize := []C.size_t{C.size_t(len(x)), 0, 0}
