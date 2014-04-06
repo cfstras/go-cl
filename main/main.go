@@ -31,9 +31,11 @@ type Context struct {
 }
 
 type Buffer C.cl_mem
+type Event C.cl_event
 
 type Kernel struct {
-	K C.cl_kernel
+	K       C.cl_kernel
+	Context *Context
 }
 
 func CreateContext() *Context {
@@ -94,7 +96,7 @@ func (c *Context) CreateBuffer(data []float32) Buffer {
 }
 
 func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
-	k := Kernel{}
+	k := Kernel{Context: c}
 	str := C.CString(sourceCode)
 	defer C.free(unsafe.Pointer(str))
 	prog := C.clCreateProgramWithSource(c.C, 1, &str, nil, &c.Err)
@@ -109,6 +111,43 @@ func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
 	c.CheckErr()
 	k.K = kernel
 	return &k
+}
+
+func (k *Kernel) Enqueue(globalWorkOffset, globalWorkSize, localWorkSize []C.size_t,
+	eventWaitList []Event) *Event {
+	var dimOff, dimGlob, dimLoc int
+	var offPtr, globPtr, locPtr *C.size_t
+	if globalWorkOffset != nil {
+		dimOff = len(globalWorkOffset)
+		offPtr = &globalWorkOffset[0]
+	}
+	if globalWorkSize != nil {
+		dimGlob = len(globalWorkSize)
+		globPtr = &globalWorkSize[0]
+	}
+	if localWorkSize != nil {
+		dimLoc = len(localWorkSize)
+		locPtr = &localWorkSize[0]
+	}
+	dim := max(dimOff, dimGlob, dimLoc)
+	if (dimOff != 0 && dimOff != dim) ||
+		(dimGlob != 0 && dimGlob != dim) ||
+		(dimLoc != 0 && dimLoc != dim) {
+		panic("globalWorkOffset, globalWorkSize and localWorkSize have to be nil or have the same length!")
+	}
+
+	var evPtr *Event
+	var evLen int
+	if eventWaitList != nil {
+		evPtr = &eventWaitList[0]
+		evLen = len(eventWaitList)
+	}
+	var event Event
+
+	k.Context.Err = C.clEnqueueNDRangeKernel(k.Context.Queue, k.K, C.cl_uint(dim),
+		offPtr, globPtr, locPtr, C.cl_uint(evLen), (*C.cl_event)(evPtr), ((*C.cl_event)(&event)))
+	k.Context.CheckErr()
+	return &event
 }
 
 func (k *Kernel) SetArg(pos int, value interface{}) {
@@ -170,13 +209,12 @@ func main() {
 	kernel.SetArg(2, mult)
 
 	// start!
-	workSize := []C.size_t{C.size_t(len(x)), 0, 0}
-	C.clEnqueueNDRangeKernel(ctx.Queue, kernel.K, 1,
-		nil, &workSize[0], nil, 0, nil, nil)
+	workSize := []C.size_t{C.size_t(len(x))}
+	kernel.Enqueue(nil, workSize, nil, nil)
 
 	ctx.Err = C.clEnqueueReadBuffer(ctx.Queue, dstBuffer, C.cl_bool(1), 0,
 		C.size_t(int(unsafe.Sizeof(x[0]))*len(x)), unsafe.Pointer(&y[0]), 0, nil, nil)
 	ctx.CheckErr()
 
-	fmt.Println(x, "*", mult, "=", y, "!!")
+	fmt.Println(x, "*", mult, "=", y)
 }
