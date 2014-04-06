@@ -1,4 +1,4 @@
-package main
+package cl
 
 /*
 #cgo LDFLAGS: -lOpenCL
@@ -20,6 +20,8 @@ import (
 	"unsafe"
 )
 
+type Size_t C.size_t
+
 type Context struct {
 	C     C.cl_context
 	Queue C.cl_command_queue
@@ -30,7 +32,11 @@ type Context struct {
 	Err C.cl_int
 }
 
-type Buffer C.cl_mem
+type Buffer struct {
+	B       C.cl_mem
+	Context *Context
+}
+
 type Event C.cl_event
 
 type Kernel struct {
@@ -87,17 +93,17 @@ func (c *Context) GetInfo() {
 }
 
 func (c *Context) CreateBuffer(data []float32) Buffer {
-	var buffer C.cl_mem
-	buffer = C.clCreateBuffer(c.C, C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR,
+	buffer := Buffer{Context: c}
+	buffer.B = C.clCreateBuffer(c.C, C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR,
 		C.size_t(int(unsafe.Sizeof(data[0]))*len(data)), unsafe.Pointer(&data[0]),
 		&c.Err)
 	c.CheckErr()
-	return Buffer(buffer)
+	return buffer
 }
 
 func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
 	k := Kernel{Context: c}
-	str := C.CString(sourceCode)
+	str := C.CString(code)
 	defer C.free(unsafe.Pointer(str))
 	prog := C.clCreateProgramWithSource(c.C, 1, &str, nil, &c.Err)
 	c.CheckErr()
@@ -113,10 +119,10 @@ func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
 	return &k
 }
 
-func (k *Kernel) Enqueue(globalWorkOffset, globalWorkSize, localWorkSize []C.size_t,
+func (k *Kernel) Enqueue(globalWorkOffset, globalWorkSize, localWorkSize []Size_t,
 	eventWaitList []Event) *Event {
 	var dimOff, dimGlob, dimLoc int
-	var offPtr, globPtr, locPtr *C.size_t
+	var offPtr, globPtr, locPtr *Size_t
 	if globalWorkOffset != nil {
 		dimOff = len(globalWorkOffset)
 		offPtr = &globalWorkOffset[0]
@@ -127,7 +133,7 @@ func (k *Kernel) Enqueue(globalWorkOffset, globalWorkSize, localWorkSize []C.siz
 	}
 	if localWorkSize != nil {
 		dimLoc = len(localWorkSize)
-		locPtr = &localWorkSize[0]
+		locPtr = (*Size_t)(&localWorkSize[0])
 	}
 	dim := max(dimOff, dimGlob, dimLoc)
 	if (dimOff != 0 && dimOff != dim) ||
@@ -145,7 +151,8 @@ func (k *Kernel) Enqueue(globalWorkOffset, globalWorkSize, localWorkSize []C.siz
 	var event Event
 
 	k.Context.Err = C.clEnqueueNDRangeKernel(k.Context.Queue, k.K, C.cl_uint(dim),
-		offPtr, globPtr, locPtr, C.cl_uint(evLen), (*C.cl_event)(evPtr), ((*C.cl_event)(&event)))
+		(*C.size_t)(offPtr), (*C.size_t)(globPtr), (*C.size_t)(locPtr),
+		C.cl_uint(evLen), (*C.cl_event)(evPtr), ((*C.cl_event)(&event)))
 	k.Context.CheckErr()
 	return &event
 }
@@ -155,8 +162,8 @@ func (k *Kernel) SetArg(pos int, value interface{}) {
 	var size uintptr
 	switch t := value.(type) {
 	case Buffer:
-		ptr = unsafe.Pointer(&t)
-		size = unsafe.Sizeof(t)
+		ptr = unsafe.Pointer(&t.B)
+		size = unsafe.Sizeof(t.B)
 	case float32:
 		ptr = unsafe.Pointer(&t)
 		size = unsafe.Sizeof(t)
@@ -169,13 +176,33 @@ func (k *Kernel) SetArg(pos int, value interface{}) {
 	case *float64:
 		ptr = unsafe.Pointer(t)
 		size = unsafe.Sizeof(*t)
-	case *Buffer:
-		ptr = unsafe.Pointer(t)
-		size = unsafe.Sizeof(*t)
 	default:
 		panic(fmt.Sprint("Type ", reflect.TypeOf(t), " not supported"))
 	}
 	C.clSetKernelArg(k.K, C.cl_uint(pos), C.size_t(size), ptr)
+}
+
+func (b *Buffer) EnqueueRead(targetPtr unsafe.Pointer, targetElSize uintptr, targetLen int,
+	blocking bool, eventWaitList []Event) Event {
+	var block C.cl_bool
+	if blocking {
+		block = 1
+	}
+
+	var evPtr *Event
+	var evLen int
+	if eventWaitList != nil {
+		evPtr = &eventWaitList[0]
+		evLen = len(eventWaitList)
+	}
+	var event Event
+
+	b.Context.Err = C.clEnqueueReadBuffer(b.Context.Queue, b.B, block, 0,
+		C.size_t(int(targetElSize)*targetLen), targetPtr,
+		C.cl_uint(evLen), (*C.cl_event)(evPtr), (*C.cl_event)(&event))
+	b.Context.CheckErr()
+
+	return event
 }
 
 func (c *Context) CheckErr() {
@@ -183,38 +210,4 @@ func (c *Context) CheckErr() {
 		fmt.Println("CL error", c.Err, "!")
 		panic("CL error")
 	}
-}
-
-const sourceCode = `
-__kernel void SAXPY (__global float* x, __global float* y, float a)
-{
-    const int i = get_global_id (0);
-
-    y [i] += a * x [i];
-}`
-
-func main() {
-	ctx := CreateContext()
-
-	x := []float32{1, 2, 3, 4}
-	var mult float32 = 2.0
-	y := make([]float32, 4)
-	buffer := ctx.CreateBuffer(x)
-	dstBuffer := ctx.CreateBuffer(y)
-
-	kernel := ctx.CompileProgram(sourceCode, "SAXPY")
-
-	kernel.SetArg(0, buffer)
-	kernel.SetArg(1, dstBuffer)
-	kernel.SetArg(2, mult)
-
-	// start!
-	workSize := []C.size_t{C.size_t(len(x))}
-	kernel.Enqueue(nil, workSize, nil, nil)
-
-	ctx.Err = C.clEnqueueReadBuffer(ctx.Queue, dstBuffer, C.cl_bool(1), 0,
-		C.size_t(int(unsafe.Sizeof(x[0]))*len(x)), unsafe.Pointer(&y[0]), 0, nil, nil)
-	ctx.CheckErr()
-
-	fmt.Println(x, "*", mult, "=", y)
 }

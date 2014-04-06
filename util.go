@@ -1,4 +1,4 @@
-package main
+package cl
 
 func max(v1 int, val ...int) int {
 	v := v1
