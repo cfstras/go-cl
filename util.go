@@ -19,7 +19,11 @@ func max(v1 int, val ...int) int {
 
 // Panics on errors
 func (c *Context) CheckErr() {
-	if c.Err != C.CL_SUCCESS {
-		panic(fmt.Sprint("CL error", c.Err, "!"))
+	CheckErr(c.Err)
+}
+
+func CheckErr(code C.cl_int) {
+	if code != C.CL_SUCCESS {
+		panic(fmt.Sprint("CL error ", code, "!"))
 	}
 }

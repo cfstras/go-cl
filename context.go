@@ -11,8 +11,8 @@ import (
 func CreateContext() *Context {
 	c := &Context{}
 
-	platformIDs := c.GetPlatformIDs()
-	deviceIDs := c.GetDeviceIDs()
+	platformIDs := GetPlatformIDs()
+	deviceIDs := GetDeviceIDs()
 
 	// make context
 	contextProps := []C.cl_context_properties{
@@ -32,42 +32,39 @@ func CreateContext() *Context {
 }
 
 // Returns the number of OpenCL platforms
-func (c *Context) GetPlatformCount() int {
+func GetPlatformCount() int {
 	var platformCount C.cl_uint
-	c.Err = C.clGetPlatformIDs(0, nil, &platformCount)
-	c.CheckErr()
+	CheckErr(C.clGetPlatformIDs(0, nil, &platformCount))
 
 	return int(platformCount)
 }
 
 // Returns a slice of platform IDs
-func (c *Context) GetPlatformIDs() []C.cl_platform_id {
-	platformCount := c.GetPlatformCount()
+func GetPlatformIDs() []C.cl_platform_id {
+	platformCount := GetPlatformCount()
 	platformIDs := make([]C.cl_platform_id, platformCount)
-	C.clGetPlatformIDs(C.cl_uint(platformCount), &platformIDs[0], nil)
+	CheckErr(C.clGetPlatformIDs(C.cl_uint(platformCount), &platformIDs[0], nil))
 
 	return platformIDs
 }
 
 // Returns the number of OpenCL devices on the first Platform
-func (c *Context) GetDeviceCount() int {
-	platformIDs := c.GetPlatformIDs()
+func GetDeviceCount() int {
+	platformIDs := GetPlatformIDs()
 	var deviceCount C.cl_uint
-	c.Err = C.clGetDeviceIDs(platformIDs[0], C.CL_DEVICE_TYPE_ALL, 0, nil,
-		&deviceCount)
-	c.CheckErr()
+	CheckErr(C.clGetDeviceIDs(platformIDs[0], C.CL_DEVICE_TYPE_ALL, 0, nil,
+		&deviceCount))
 
 	return int(deviceCount)
 }
 
 // Returns a slice of device IDs on the first platform
-func (c *Context) GetDeviceIDs() []C.cl_device_id {
-	platformIDs := c.GetPlatformIDs()
-	deviceCount := c.GetDeviceCount()
+func GetDeviceIDs() []C.cl_device_id {
+	platformIDs := GetPlatformIDs()
+	deviceCount := GetDeviceCount()
 	deviceIDs := make([]C.cl_device_id, deviceCount)
-	c.Err = C.clGetDeviceIDs(platformIDs[0], C.CL_DEVICE_TYPE_ALL,
-		C.cl_uint(deviceCount), &deviceIDs[0], nil)
-	c.CheckErr()
+	CheckErr(C.clGetDeviceIDs(platformIDs[0], C.CL_DEVICE_TYPE_ALL,
+		C.cl_uint(deviceCount), &deviceIDs[0], nil))
 
 	return deviceIDs
 }
@@ -78,7 +75,7 @@ func (c *Context) GetDeviceName() string {
 	mem := C.malloc(C.size_t(unsafe.Sizeof(C.char(0))) * C.size_t(l))
 	defer C.free(mem)
 
-	c.Err = C.clGetDeviceInfo(c.GetDeviceIDs()[0], C.CL_DEVICE_NAME, C.size_t(l), mem, nil)
+	c.Err = C.clGetDeviceInfo(GetDeviceIDs()[0], C.CL_DEVICE_NAME, C.size_t(l), mem, nil)
 	name := C.GoString((*C.char)(mem))
 	return name
 }
@@ -102,7 +99,7 @@ func (c *Context) CompileProgram(code, mainFunction string) *Kernel {
 	prog := C.clCreateProgramWithSource(c.C, 1, &str, nil, &c.Err)
 	c.CheckErr()
 
-	deviceIDs := c.GetDeviceIDs()
+	deviceIDs := GetDeviceIDs()
 	C.clBuildProgram(prog, C.cl_uint(len(deviceIDs)), &deviceIDs[0], nil, nil, nil)
 	c.CheckErr()
 
