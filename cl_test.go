@@ -16,6 +16,29 @@ __kernel void SAXPY (__global float* x, __global float* y, float a)
 }
 `
 
+func TestGetPlatforms(t *testing.T) {
+	if num := GetPlatformCount(); num <= 0 {
+		t.Error("PlatformCount is", num)
+	}
+	if platforms := GetPlatformIDs(); platforms == nil || len(platforms) == 0 {
+		t.Error("No Platforms found")
+	}
+}
+
+func TestGetDevices(t *testing.T) {
+	if num := GetDeviceCount(); num <= 0 {
+		t.Error("DeviceCount is", num)
+	}
+	if devices := GetDeviceIDs(); devices == nil || len(devices) == 0 {
+		t.Error("No Devices found")
+	}
+}
+
+func TestGetContext(t *testing.T) {
+	c := CreateContext()
+	c.CheckErr()
+}
+
 // Test a simple a*X = Y scalar multiplication
 func TestSimpleSAXPY(t *testing.T) {
 	num := 16
